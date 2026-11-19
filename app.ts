@@ -144,7 +144,16 @@ export function createApp(): Server {
         // REST v3.
         if (path === '/api/v3' || path.startsWith('/api/v3/')) {
           if (!checkAuth(req, res, requestId)) return;
-          const raw = await readBody(req);
+          // A GET/HEAD with no Content-Length and no Transfer-Encoding carries no
+          // body, so there is nothing to wait for: skip the read and answer at once.
+          // Anything that may carry a body still goes through readBody, so a
+          // keep-alive socket is never left with unread bytes on it.
+          const contentLength = req.headers['content-length'];
+          const mayHaveBody =
+            (method !== 'GET' && method !== 'HEAD') ||
+            req.headers['transfer-encoding'] !== undefined ||
+            (typeof contentLength === 'string' && contentLength !== '0');
+          const raw = mayHaveBody ? await readBody(req) : Buffer.alloc(0);
           let parsed: unknown = null;
           if (raw.length > 0) {
             try {

@@ -133,18 +133,29 @@ function sidebandPack(pack: Buffer): Buffer[] {
   return out;
 }
 
-function fetchPackFor(repo: Repo, req: FetchRequest): { pack: Buffer; shallow: string[]; unshallow: string[] } {
+interface FetchResult {
+  pack: Buffer;
+  shallow: string[];
+  unshallow: string[];
+  /** The whole framed v2 / v0 answer, built once per request signature and reused. */
+  v2?: Buffer;
+  v0?: Buffer;
+}
+
+function fetchPackFor(repo: Repo, req: FetchRequest): FetchResult {
   const key = JSON.stringify({ w: [...req.wants].sort(), h: [...req.haves].sort(), s: [...req.shallow].sort(), d: req.depth });
-  const cached = repo.packCache.get(key);
+  const cached = repo.packCache.get(key) as FetchResult | undefined;
   if (cached !== undefined) return cached;
   const sel = selectFetchObjects(repo, req.wants, req.haves, req.shallow, req.depth);
-  const result = { pack: writePack(sel.objects), shallow: sel.shallow, unshallow: sel.unshallow };
+  const result: FetchResult = { pack: writePack(sel.objects), shallow: sel.shallow, unshallow: sel.unshallow };
   repo.packCache.set(key, result);
   return result;
 }
 
 function v2Fetch(repo: Repo, req: FetchRequest): Buffer {
-  const { pack, shallow, unshallow } = fetchPackFor(repo, req);
+  const cached = fetchPackFor(repo, req);
+  if (cached.v2 !== undefined) return cached.v2;
+  const { pack, shallow, unshallow } = cached;
   const parts: Buffer[] = [];
   const ackLines: string[] = [];
   if (req.haves.length === 0) ackLines.push('NAK\n');
@@ -174,11 +185,15 @@ function v2Fetch(repo: Repo, req: FetchRequest): Buffer {
   parts.push(pktLine('packfile\n'));
   for (const chunk of sidebandPack(pack)) parts.push(chunk);
   parts.push(pktFlush());
-  return Buffer.concat(parts);
+  const out = Buffer.concat(parts);
+  cached.v2 = out;
+  return out;
 }
 
 function v0Fetch(repo: Repo, req: FetchRequest): Buffer {
-  const { pack, shallow, unshallow } = fetchPackFor(repo, req);
+  const cached = fetchPackFor(repo, req);
+  if (cached.v0 !== undefined) return cached.v0;
+  const { pack, shallow, unshallow } = cached;
   const parts: Buffer[] = [];
   if (req.haves.length === 0) parts.push(pktLine('NAK\n'));
   else {
@@ -195,7 +210,9 @@ function v0Fetch(repo: Repo, req: FetchRequest): Buffer {
   for (const oid of unshallow) parts.push(pktLine(`unshallow ${oid}\n`));
   for (const chunk of sidebandPack(pack)) parts.push(chunk);
   parts.push(pktFlush());
-  return Buffer.concat(parts);
+  const out = Buffer.concat(parts);
+  cached.v0 = out;
+  return out;
 }
 
 function parseV2Lines(packets: Pkt[]): { command: string; args: string[] } {

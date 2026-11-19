@@ -48,6 +48,17 @@ export function sendJson(ctx: RestCtx, status: number, payload: unknown, extra: 
   ctx.res.end(text);
 }
 
+/** Send an already-serialised JSON body (one trailing newline, as sendJson writes). */
+function sendJsonText(ctx: RestCtx, status: number, entry: { text: string; length: number }, extra: Record<string, string> = {}): void {
+  ctx.res.writeHead(status, {
+    'content-type': JSON_TYPE,
+    'content-length': entry.length + 1,
+    'x-github-request-id': ctx.requestId,
+    ...extra,
+  });
+  ctx.res.end(`${entry.text}\n`);
+}
+
 export function sendError(ctx: RestCtx, status: number, message: string): void {
   sendJson(ctx, status, { message });
 }
@@ -100,6 +111,37 @@ function issueJson(repo: Repo, issue: Issue): Record<string, unknown> {
     comments_url: `/api/v3/repos/${repo.owner}/${repo.name}/issues/${issue.number}/comments`,
     comments: issue.comments.length,
   };
+}
+
+/**
+ * The issue's REST JSON, serialised once per state and reused for repeat reads (the
+ * read workload GETs one issue 2,000 times). The cache is self-validating: the key
+ * covers every field issueJson reads that can change — updatedSeq (every title/body/
+ * state/label PATCH and every close bumps it), the comment count, and the labels'
+ * colour/description — so no mutation site needs to remember to invalidate it.
+ * Kept in a WeakMap, never on the issue object, so the state export is untouched.
+ */
+const issueJsonCache = new WeakMap<Issue, { key: string; text: string; length: number }>();
+
+function issueCacheKey(repo: Repo, issue: Issue): string {
+  if (issue.labels.length === 0) return `${issue.updatedSeq}:${issue.comments.length}:`;
+  const labelSig = issue.labels
+    .map((name) => {
+      const label = repo.labels.get(name);
+      return label === undefined ? '' : `${label.color}/${label.description}`;
+    })
+    .join('|');
+  return `${issue.updatedSeq}:${issue.comments.length}:${labelSig}`;
+}
+
+export function issueJsonText(repo: Repo, issue: Issue): { text: string; length: number } {
+  const key = issueCacheKey(repo, issue);
+  const cached = issueJsonCache.get(issue);
+  if (cached !== undefined && cached.key === key) return cached;
+  const text = JSON.stringify(issueJson(repo, issue));
+  const entry = { key, text, length: Buffer.byteLength(text) };
+  issueJsonCache.set(issue, entry);
+  return entry;
 }
 
 export function mergeableOf(repo: Repo, pr: PullRequest): boolean {
@@ -766,7 +808,7 @@ function handleIssues(ctx: RestCtx, method: string, owner: string, name: string,
       ctx.store.nextIssueId += 1;
       repo.nextIssue += 1;
       repo.issues.push(issue);
-      sendJson(ctx, 201, issueJson(repo, issue));
+      sendJsonText(ctx, 201, issueJsonText(repo, issue));
       return;
     }
     if (method === 'GET') {
@@ -777,7 +819,10 @@ function handleIssues(ctx: RestCtx, method: string, owner: string, name: string,
       if (sort === 'created') {
         list = [...list].sort((a, b) => (direction === 'asc' ? a.createdSeq - b.createdSeq || a.number - b.number : b.createdSeq - a.createdSeq || b.number - a.number));
       }
-      sendJson(ctx, 200, list.map((i) => issueJson(repo, i)));
+      const items = list.map((i) => issueJsonText(repo, i));
+      const text = `[${items.map((e) => e.text).join(',')}]`;
+      const length = items.reduce((sum, e) => sum + e.length, 0) + Math.max(0, items.length - 1) + 2;
+      sendJsonText(ctx, 200, { text, length });
       return;
     }
     sendError(ctx, 404, 'Not Found');
@@ -793,7 +838,7 @@ function handleIssues(ctx: RestCtx, method: string, owner: string, name: string,
 
   if (rest.length === 1) {
     if (method === 'GET') {
-      sendJson(ctx, 200, issueJson(repo, issue));
+      sendJsonText(ctx, 200, issueJsonText(repo, issue));
       return;
     }
     if (method === 'PATCH') {
@@ -813,7 +858,7 @@ function handleIssues(ctx: RestCtx, method: string, owner: string, name: string,
       }
       ctx.store.stamp();
       issue.updatedSeq = ctx.store.seq;
-      sendJson(ctx, 200, issueJson(repo, issue));
+      sendJsonText(ctx, 200, issueJsonText(repo, issue));
       return;
     }
     sendError(ctx, 404, 'Not Found');

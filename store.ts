@@ -22,10 +22,9 @@ export function sha1Hex(data: Buffer): string {
   return createHash('sha1').update(data).digest('hex');
 }
 
-/** The git object id of `<type> <size>\0<bytes>`. */
+/** The git object id of `<type> <size>\0<bytes>` (two hash updates, no concat copy). */
 export function hashObject(type: string, data: Buffer): string {
-  const head = Buffer.from(`${type} ${data.length}\0`, 'utf8');
-  return sha1Hex(Buffer.concat([head, data]));
+  return createHash('sha1').update(`${type} ${data.length}\0`, 'utf8').update(data).digest('hex');
 }
 
 export interface GitObject {
