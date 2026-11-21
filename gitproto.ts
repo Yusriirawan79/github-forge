@@ -47,6 +47,40 @@ export function touchRepo(repo: Repo): void {
   repo.packCache.clear();
 }
 
+/** Parents of a commit, parsed once per object and reused: the push workload's
+ * fast-forward check walks the whole chain on every push, so re-parsing every
+ * commit on every push is quadratic. Parents are scanned from the raw bytes
+ * (header only, up to the blank line) instead of a full commit parse. */
+const parentsCache = new WeakMap<Repo, Map<string, string[]>>();
+function commitParents(repo: Repo, oid: string): string[] {
+  let perRepo = parentsCache.get(repo);
+  if (perRepo === undefined) {
+    perRepo = new Map<string, string[]>();
+    parentsCache.set(repo, perRepo);
+  }
+  const hit = perRepo.get(oid);
+  if (hit !== undefined) return hit;
+  const parents: string[] = [];
+  const obj = repo.objects.get(oid);
+  if (obj !== undefined && obj.type === 'commit') {
+    const data = obj.data;
+    const headerEnd = data.indexOf('\n\n');
+    const end = headerEnd < 0 ? data.length : headerEnd;
+    let idx = 0;
+    for (;;) {
+      const at = data.indexOf('\nparent ', idx);
+      if (at < 0 || at >= end) break;
+      const start = at + 8;
+      const eol = data.indexOf(0x0a, start);
+      const stop = eol < 0 || eol > end ? end : eol;
+      parents.push(data.subarray(start, stop).toString('utf8'));
+      idx = start;
+    }
+  }
+  perRepo.set(oid, parents);
+  return parents;
+}
+
 function isAncestor(repo: Repo, ancestor: string, tip: string): boolean {
   if (ancestor === tip) return true;
   const seen = new Set<string>();
@@ -56,9 +90,7 @@ function isAncestor(repo: Repo, ancestor: string, tip: string): boolean {
     if (oid === ancestor) return true;
     if (seen.has(oid)) continue;
     seen.add(oid);
-    const obj = repo.objects.get(oid);
-    if (obj === undefined || obj.type !== 'commit') continue;
-    for (const parent of parseCommit(obj.data).parents) queue.push(parent);
+    for (const parent of commitParents(repo, oid)) queue.push(parent);
   }
   return false;
 }

@@ -33,12 +33,10 @@ function readBody(req: IncomingMessage): Promise<Buffer> {
 }
 
 function pathOf(req: IncomingMessage): { path: string; query: URLSearchParams } {
-  try {
-    const url = new URL(req.url ?? '/', 'http://entry');
-    return { path: url.pathname, query: url.searchParams };
-  } catch {
-    return { path: '/', query: new URLSearchParams() };
-  }
+  const raw = req.url ?? '/';
+  const q = raw.indexOf('?');
+  if (q < 0) return { path: raw, query: new URLSearchParams() };
+  return { path: raw.slice(0, q), query: new URLSearchParams(raw.slice(q + 1)) };
 }
 
 /** The bearer <redacted> the trial presents, when the environment names one. */
@@ -49,15 +47,14 @@ function expectedToken(): string {
 /** 401 unless the request carries the expected Bearer token. */
 function checkAuth(req: IncomingMessage, res: ServerResponse, requestId: string): boolean {
   const header = req.headers.authorization ?? '';
-  const match = /^Bearer\s+(.+)$/.exec(header);
-  if (match === null) {
+  if (!header.startsWith('Bearer ') || header.length === 7) {
     const text = `${JSON.stringify({ message: 'Requires authentication' })}\n`;
     res.writeHead(401, { 'content-type': JSON_TYPE, 'content-length': Buffer.byteLength(text), 'x-github-request-id': requestId });
     res.end(text);
     return false;
   }
   const expected = expectedToken();
-  if (expected !== '' && match[1] !== expected) {
+  if (expected !== '' && header.slice(7) !== expected) {
     const text = `${JSON.stringify({ message: 'Bad credentials' })}\n`;
     res.writeHead(401, { 'content-type': JSON_TYPE, 'content-length': Buffer.byteLength(text), 'x-github-request-id': requestId });
     res.end(text);

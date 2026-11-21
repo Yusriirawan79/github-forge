@@ -48,8 +48,20 @@ export function sendJson(ctx: RestCtx, status: number, payload: unknown, extra: 
   ctx.res.end(text);
 }
 
-/** Send an already-serialised JSON body (one trailing newline, as sendJson writes). */
-function sendJsonText(ctx: RestCtx, status: number, entry: { text: string; length: number }, extra: Record<string, string> = {}): void {
+/** Send an already-serialised JSON body. Entries flagged `terminated` already carry
+ * the trailing newline (and count it in `length`), so they go out untouched instead
+ * of being copied into a new string on every send. */
+function sendJsonText(ctx: RestCtx, status: number, entry: { text: string; length: number; terminated?: boolean }, extra: Record<string, string> = {}): void {
+  if (entry.terminated === true) {
+    ctx.res.writeHead(status, {
+      'content-type': JSON_TYPE,
+      'content-length': entry.length,
+      'x-github-request-id': ctx.requestId,
+      ...extra,
+    });
+    ctx.res.end(entry.text);
+    return;
+  }
   ctx.res.writeHead(status, {
     'content-type': JSON_TYPE,
     'content-length': entry.length + 1,
@@ -121,7 +133,7 @@ function issueJson(repo: Repo, issue: Issue): Record<string, unknown> {
  * colour/description — so no mutation site needs to remember to invalidate it.
  * Kept in a WeakMap, never on the issue object, so the state export is untouched.
  */
-const issueJsonCache = new WeakMap<Issue, { key: string; text: string; length: number }>();
+const issueJsonCache = new WeakMap<Issue, { key: string; text: string; length: number; terminated: boolean }>();
 
 function issueCacheKey(repo: Repo, issue: Issue): string {
   if (issue.labels.length === 0) return `${issue.updatedSeq}:${issue.comments.length}:`;
@@ -134,12 +146,12 @@ function issueCacheKey(repo: Repo, issue: Issue): string {
   return `${issue.updatedSeq}:${issue.comments.length}:${labelSig}`;
 }
 
-export function issueJsonText(repo: Repo, issue: Issue): { text: string; length: number } {
+export function issueJsonText(repo: Repo, issue: Issue): { text: string; length: number; terminated: boolean } {
   const key = issueCacheKey(repo, issue);
   const cached = issueJsonCache.get(issue);
   if (cached !== undefined && cached.key === key) return cached;
-  const text = JSON.stringify(issueJson(repo, issue));
-  const entry = { key, text, length: Buffer.byteLength(text) };
+  const text = `${JSON.stringify(issueJson(repo, issue))}\n`;
+  const entry = { key, text, length: Buffer.byteLength(text), terminated: true };
   issueJsonCache.set(issue, entry);
   return entry;
 }
