@@ -3,7 +3,7 @@
 // token's owner (the scenario viewer) as the repository owner; the same repository name
 // under any other login is 404, never 403.
 
-import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { MiniReq, MiniRes } from './app.ts';
 import { buildTreeFromFlat, flattenTree } from './gitobjs.ts';
 import { touchRepo } from './gitproto.ts';
 import {
@@ -26,8 +26,8 @@ import {
 
 export interface RestCtx {
   store: Store;
-  req: IncomingMessage;
-  res: ServerResponse;
+  req: MiniReq;
+  res: MiniRes;
   /** Path segments after /api/v3. */
   segments: string[];
   query: URLSearchParams;
@@ -51,7 +51,17 @@ export function sendJson(ctx: RestCtx, status: number, payload: unknown, extra: 
 /** Send an already-serialised JSON body. Entries flagged `terminated` already carry
  * the trailing newline (and count it in `length`), so they go out untouched instead
  * of being copied into a new string on every send. */
-function sendJsonText(ctx: RestCtx, status: number, entry: { text: string; length: number; terminated?: boolean }, extra: Record<string, string> = {}): void {
+function sendJsonText(ctx: RestCtx, status: number, entry: { text: string; length: number; terminated?: boolean } | { buf: Buffer }, extra: Record<string, string> = {}): void {
+  if ('buf' in entry) {
+    ctx.res.writeHead(status, {
+      'content-type': JSON_TYPE,
+      'content-length': entry.buf.length,
+      'x-github-request-id': ctx.requestId,
+      ...extra,
+    });
+    ctx.res.end(entry.buf);
+    return;
+  }
   if (entry.terminated === true) {
     ctx.res.writeHead(status, {
       'content-type': JSON_TYPE,
@@ -133,7 +143,7 @@ function issueJson(repo: Repo, issue: Issue): Record<string, unknown> {
  * colour/description — so no mutation site needs to remember to invalidate it.
  * Kept in a WeakMap, never on the issue object, so the state export is untouched.
  */
-const issueJsonCache = new WeakMap<Issue, { key: string; text: string; length: number; terminated: boolean }>();
+const issueJsonCache = new WeakMap<Issue, { key: string; buf: Buffer }>();
 
 function issueCacheKey(repo: Repo, issue: Issue): string {
   if (issue.labels.length === 0) return `${issue.updatedSeq}:${issue.comments.length}:`;
@@ -146,12 +156,11 @@ function issueCacheKey(repo: Repo, issue: Issue): string {
   return `${issue.updatedSeq}:${issue.comments.length}:${labelSig}`;
 }
 
-export function issueJsonText(repo: Repo, issue: Issue): { text: string; length: number; terminated: boolean } {
+export function issueJsonText(repo: Repo, issue: Issue): { buf: Buffer } {
   const key = issueCacheKey(repo, issue);
   const cached = issueJsonCache.get(issue);
   if (cached !== undefined && cached.key === key) return cached;
-  const text = `${JSON.stringify(issueJson(repo, issue))}\n`;
-  const entry = { key, text, length: Buffer.byteLength(text), terminated: true };
+  const entry = { key, buf: Buffer.from(`${JSON.stringify(issueJson(repo, issue))}\n`, 'utf8') };
   issueJsonCache.set(issue, entry);
   return entry;
 }
@@ -832,9 +841,15 @@ function handleIssues(ctx: RestCtx, method: string, owner: string, name: string,
         list = [...list].sort((a, b) => (direction === 'asc' ? a.createdSeq - b.createdSeq || a.number - b.number : b.createdSeq - a.createdSeq || b.number - a.number));
       }
       const items = list.map((i) => issueJsonText(repo, i));
-      const text = `[${items.map((e) => e.text).join(',')}]`;
-      const length = items.reduce((sum, e) => sum + e.length, 0) + Math.max(0, items.length - 1) + 2;
-      sendJsonText(ctx, 200, { text, length });
+      // Cached entries end with '\n'; the list body takes each item's JSON
+      // without it (subarray view, no copy) and adds one newline at the end.
+      const parts: Buffer[] = [Buffer.from('[', 'ascii')];
+      items.forEach((e, idx) => {
+        if (idx > 0) parts.push(Buffer.from(',', 'ascii'));
+        parts.push(e.buf.subarray(0, e.buf.length - 1));
+      });
+      parts.push(Buffer.from(']\n', 'ascii'));
+      sendJsonText(ctx, 200, { buf: Buffer.concat(parts) });
       return;
     }
     sendError(ctx, 404, 'Not Found');

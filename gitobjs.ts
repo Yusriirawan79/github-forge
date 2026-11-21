@@ -2,6 +2,7 @@
 // reachability walk a fetch or clone needs. No git binary, no child process —
 // everything is Buffer work over the store in store.ts.
 
+import { createHash } from 'node:crypto';
 import { inflateSync, deflateSync } from 'node:zlib';
 import { buildTree, hashObject, parseCommit, parseTag, parseTree, sha1Hex, type GitObject, type Repo, type TreeEntry } from './store.ts';
 
@@ -355,9 +356,11 @@ export function writePack(objects: readonly GitObject[]): Buffer {
     parts.push(Buffer.from(header));
     parts.push(deflateSync(obj.data, { level: 1 }));
   }
-  const body = Buffer.concat(parts);
-  const trailer = Buffer.from(sha1Hex(body), 'hex');
-  return Buffer.concat([body, trailer]);
+  // One pass: hash the parts incrementally, then a single concat for the whole pack.
+  const hasher = createHash('sha1');
+  for (const part of parts) hasher.update(part);
+  parts.push(Buffer.from(hasher.digest('hex'), 'hex'));
+  return Buffer.concat(parts);
 }
 
 /** Verify a packfile's trailing SHA-1. */

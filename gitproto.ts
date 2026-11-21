@@ -4,7 +4,7 @@
 // repository, fetch answers in delimited sections, and push reports travel inside
 // side-band-64k band 1 as pkt-lined `unpack`/`ok`/`ng` lines.
 
-import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { MiniReq, MiniRes } from './app.ts';
 import {
   decodePktLines,
   encodePktLines,
@@ -132,7 +132,7 @@ function v0Advertisement(repo: Repo, service: string): Buffer {
   return Buffer.concat(parts);
 }
 
-export function handleInfoRefs(repo: Repo | undefined, service: string, req: IncomingMessage, res: ServerResponse): void {
+export function handleInfoRefs(repo: Repo | undefined, service: string, req: MiniReq, res: MiniRes): void {
   if (repo === undefined || (service !== 'git-upload-pack' && service !== 'git-receive-pack')) {
     res.writeHead(404, { 'content-type': 'text/plain' });
     res.end('Not Found');
@@ -301,7 +301,7 @@ function v2LsRefs(repo: Repo, args: readonly string[]): Buffer {
   return Buffer.concat(parts);
 }
 
-export function handleUploadPack(repo: Repo | undefined, body: Buffer, req: IncomingMessage, res: ServerResponse): void {
+export function handleUploadPack(repo: Repo | undefined, body: Buffer, req: MiniReq, res: MiniRes): void {
   if (repo === undefined) {
     res.writeHead(404, { 'content-type': 'text/plain' });
     res.end('Not Found');
@@ -377,7 +377,7 @@ interface PushCommand {
   ref: string;
 }
 
-export function handleReceivePack(repo: Repo | undefined, body: Buffer, _req: IncomingMessage, res: ServerResponse): void {
+export function handleReceivePack(repo: Repo | undefined, body: Buffer, _req: MiniReq, res: MiniRes): void {
   if (repo === undefined) {
     res.writeHead(404, { 'content-type': 'text/plain' });
     res.end('Not Found');

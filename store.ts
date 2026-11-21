@@ -7,7 +7,7 @@
 // scenario viewer, adaiversen (id 1000); that login is what GET /api/v3/user and GraphQL
 // viewer { login } answer with.
 
-import { createHash } from 'node:crypto';
+import { createHash, hash as cryptoHash } from 'node:crypto';
 
 export const VIEWER_LOGIN = 'adaiversen';
 export const VIEWER_ID = 1000;
@@ -19,7 +19,7 @@ export const DEFAULT_BRANCH = 'main';
 export const EPOCH_SEC = 1735689600;
 
 export function sha1Hex(data: Buffer): string {
-  return createHash('sha1').update(data).digest('hex');
+  return cryptoHash('sha1', data, 'hex');
 }
 
 /** The git object id of `<type> <size>\0<bytes>` (two hash updates, no concat copy). */

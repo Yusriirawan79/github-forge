@@ -4,7 +4,7 @@
 // byte-identical, and every tool runs through the same store functions REST uses,
 // so MCP and REST see the same repositories, issues and pull requests with the same ids.
 
-import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { MiniReq, MiniRes } from './app.ts';
 import { createIssueInRepo, createPullInRepo, mergePullInRepo, repoJson } from './rest.ts';
 import { VIEWER_LOGIN, type Repo, type Store } from './store.ts';
 
@@ -239,13 +239,13 @@ function callTool(store: Store, name: string, rawArgs: unknown): ToolResult {
   }
 }
 
-function sendRpc(res: ServerResponse, status: number, payload: unknown): void {
+function sendRpc(res: MiniRes, status: number, payload: unknown): void {
   const text = `${JSON.stringify(payload)}\n`;
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(text) });
   res.end(text);
 }
 
-export function handleMcp(store: Store, req: IncomingMessage, res: ServerResponse, rawBody: Buffer, requestId: string): void {
+export function handleMcp(store: Store, req: MiniReq, res: MiniRes, rawBody: Buffer, requestId: string): void {
   void requestId;
   if (req.method === 'GET' || req.method === 'DELETE') {
     res.writeHead(405, { 'content-type': 'application/json; charset=utf-8' });
